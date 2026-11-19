@@ -63,6 +63,9 @@ def add_or_update_cli(name: str | None = None) -> int:
             ),
             provider_name=provider_name.strip(),
             provider_native_tools=native_tools,
+            # Header settings are YAML/API-managed; editing here must keep them.
+            extra_headers=dict(existing.extra_headers) if existing else {},
+            session_id_header=existing.session_id_header if existing else "",
         )
     except ValueError as e:
         print(str(e))

@@ -96,6 +96,102 @@ class TestLlmBackendsRoutes:
         assert resp.status_code == 200
         assert captured["name"] == "my"
 
+    def test_create_backend_carries_header_fields(self, monkeypatch):
+        captured = {}
+
+        def fake_save(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(llm_mod, "save_backend_record", fake_save)
+        client = TestClient(_app(llm_mod.router))
+        resp = client.post(
+            "/backends",
+            json={
+                "name": "opencode-go",
+                "backend_type": "openai",
+                "extra_headers": {"x-custom": "v"},
+                "session_id_header": "x-opencode-session",
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["extra_headers"] == {"x-custom": "v"}
+        assert captured["session_id_header"] == "x-opencode-session"
+
+    def test_create_backend_preserves_stored_headers_when_omitted(self, monkeypatch):
+        from kohakuterrarium.llm.profiles.types import LLMBackend
+
+        captured = {}
+        existing = LLMBackend(
+            name="opencode-go",
+            backend_type="openai",
+            extra_headers={"x-custom": "v"},
+            session_id_header="x-opencode-session",
+        )
+
+        def fake_get(name):
+            return existing
+
+        def fake_save(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(llm_mod, "get_backend", fake_get)
+        monkeypatch.setattr(llm_mod, "save_backend_record", fake_save)
+        client = TestClient(_app(llm_mod.router))
+        # The settings UI sends no header fields; the stored set must survive.
+        resp = client.post(
+            "/backends",
+            json={"name": "opencode-go", "backend_type": "openai"},
+        )
+        assert resp.status_code == 200
+        assert captured["extra_headers"] == {"x-custom": "v"}
+        assert captured["session_id_header"] == "x-opencode-session"
+
+    def test_create_backend_explicit_values_replace_stored_headers(self, monkeypatch):
+        from kohakuterrarium.llm.profiles.types import LLMBackend
+
+        captured = {}
+        existing = LLMBackend(
+            name="opencode-go",
+            backend_type="openai",
+            extra_headers={"x-old": "v"},
+            session_id_header="x-old-session",
+        )
+
+        monkeypatch.setattr(llm_mod, "get_backend", lambda name: existing)
+        monkeypatch.setattr(
+            llm_mod, "save_backend_record", lambda **kw: captured.update(kw)
+        )
+        client = TestClient(_app(llm_mod.router))
+        resp = client.post(
+            "/backends",
+            json={
+                "name": "opencode-go",
+                "backend_type": "openai",
+                "extra_headers": {},
+                "session_id_header": "",
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["extra_headers"] == {}
+        assert captured["session_id_header"] == ""
+
+    def test_create_backend_rejects_invalid_header_name(self, monkeypatch):
+        def boom(**k):
+            raise ValueError("invalid header name: 'bad name'")
+
+        monkeypatch.setattr(llm_mod, "save_backend_record", boom)
+        client = TestClient(_app(llm_mod.router))
+        resp = client.post(
+            "/backends",
+            json={
+                "name": "my",
+                "backend_type": "openai",
+                "session_id_header": "bad name",
+            },
+        )
+        assert resp.status_code == 400
+        assert "invalid header name" in resp.json()["detail"]
+
     def test_create_backend_validation_error(self, monkeypatch):
         def boom(**k):
             raise ValueError("Unsupported backend type")

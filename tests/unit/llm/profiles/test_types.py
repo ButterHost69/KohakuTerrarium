@@ -73,6 +73,42 @@ class TestLLMBackend:
         a.provider_native_tools.append("t")
         assert b.provider_native_tools == []
 
+    def test_to_dict_includes_header_fields(self):
+        backend = LLMBackend(
+            name="opencode-go",
+            backend_type="openai",
+            extra_headers={"x-custom": "v"},
+            session_id_header="x-opencode-session",
+        )
+        assert backend.to_dict() == {
+            "backend_type": "openai",
+            "extra_headers": {"x-custom": "v"},
+            "session_id_header": "x-opencode-session",
+        }
+
+    def test_from_dict_round_trips_header_fields(self):
+        data = {
+            "backend_type": "openai",
+            "extra_headers": {"x-custom": "v"},
+            "session_id_header": "x-opencode-session",
+        }
+        backend = LLMBackend.from_dict("opencode-go", data)
+        assert backend.extra_headers == {"x-custom": "v"}
+        assert backend.session_id_header == "x-opencode-session"
+        assert backend.to_dict() == data
+
+    def test_from_dict_drops_invalid_header_rows(self):
+        backend = LLMBackend.from_dict(
+            "b",
+            {
+                "backend_type": "openai",
+                "extra_headers": {"bad name": "v", "x-ok": "fine", "x-none": None},
+                "session_id_header": "not a header",
+            },
+        )
+        assert backend.extra_headers == {"x-ok": "fine"}
+        assert backend.session_id_header == ""
+
 
 # ---------------------------------------------------------------------------
 # LLMPreset
@@ -248,3 +284,22 @@ class TestLLMProfile:
             "p", {"model": "m", "backend_native_tools": ["a", None, 3]}
         )
         assert profile.backend_native_tools == ["a", "3"]
+
+    def test_header_fields_round_trip(self):
+        data = {
+            "model": "m",
+            "extra_headers": {"x-custom": "v"},
+            "session_id_header": "x-opencode-session",
+        }
+        profile = LLMProfile.from_dict("p", data)
+        assert profile.extra_headers == {"x-custom": "v"}
+        assert profile.session_id_header == "x-opencode-session"
+        assert profile.to_dict()["extra_headers"] == {"x-custom": "v"}
+        assert profile.to_dict()["session_id_header"] == "x-opencode-session"
+
+    def test_header_fields_default_empty_and_omitted(self):
+        profile = LLMProfile.from_dict("p", {"model": "m"})
+        assert profile.extra_headers == {}
+        assert profile.session_id_header == ""
+        assert "extra_headers" not in profile.to_dict()
+        assert "session_id_header" not in profile.to_dict()

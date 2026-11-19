@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from kohakuterrarium.llm.headers import normalize_header_map, normalize_header_name
+
 _LEGACY_BACKEND_TYPES = {"openai", "codex", "codex-oauth", "anthropic"}
 
 
@@ -14,6 +16,10 @@ class LLMBackend:
     api_key_env: str = ""
     provider_name: str = ""
     provider_native_tools: list[str] = field(default_factory=list)
+    # Static headers sent on every request to this provider.
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    # Header name that receives the active agent's session id.
+    session_id_header: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"backend_type": self.backend_type}
@@ -25,6 +31,10 @@ class LLMBackend:
             data["provider_name"] = self.provider_name
         if self.provider_native_tools:
             data["provider_native_tools"] = list(self.provider_native_tools)
+        if self.extra_headers:
+            data["extra_headers"] = dict(self.extra_headers)
+        if self.session_id_header:
+            data["session_id_header"] = self.session_id_header
         return data
 
     @classmethod
@@ -39,6 +49,8 @@ class LLMBackend:
             api_key_env=data.get("api_key_env", ""),
             provider_name=data.get("provider_name", ""),
             provider_native_tools=[str(tool) for tool in native_tools if tool],
+            extra_headers=normalize_header_map(data.get("extra_headers")),
+            session_id_header=normalize_header_name(data.get("session_id_header")),
         )
 
 
@@ -129,6 +141,10 @@ class LLMProfile:
     selected_variations: dict[str, str] = field(default_factory=dict)
     backend_provider_name: str = ""
     backend_native_tools: list[str] = field(default_factory=list)
+    # Static request headers inherited from the backend record.
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    # Header name that receives the active agent's session id.
+    session_id_header: str = ""
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> "LLMProfile":
@@ -157,6 +173,8 @@ class LLMProfile:
             selected_variations=data.get("selected_variations", {}) or {},
             backend_provider_name=data.get("backend_provider_name", ""),
             backend_native_tools=[str(tool) for tool in native_tools if tool],
+            extra_headers=normalize_header_map(data.get("extra_headers")),
+            session_id_header=normalize_header_name(data.get("session_id_header")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -185,4 +203,8 @@ class LLMProfile:
             data["retry_policy"] = self.retry_policy
         if self.selected_variations:
             data["selected_variations"] = self.selected_variations
+        if self.extra_headers:
+            data["extra_headers"] = dict(self.extra_headers)
+        if self.session_id_header:
+            data["session_id_header"] = self.session_id_header
         return data

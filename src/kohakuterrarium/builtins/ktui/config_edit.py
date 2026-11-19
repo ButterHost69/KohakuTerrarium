@@ -196,6 +196,9 @@ class ConfigEdit:
                 backend_type=values["backend_type"],
                 base_url=values["base_url"].strip(),
                 api_key_env=values["api_key_env"].strip(),
+                # Header settings are YAML/API-managed; editing here keeps them.
+                extra_headers=dict(backend.extra_headers) if backend else {},
+                session_id_header=backend.session_id_header if backend else "",
             )
         )
         shell.app.notify(f"provider {new} saved", "success")

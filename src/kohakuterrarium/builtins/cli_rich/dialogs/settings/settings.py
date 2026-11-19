@@ -202,6 +202,8 @@ class SettingsOverlay:
                     "backend_type": backend.backend_type,
                     "base_url": backend.base_url or "",
                     "api_key_env": backend.api_key_env or "",
+                    "extra_headers": dict(backend.extra_headers or {}),
+                    "session_id_header": backend.session_id_header or "",
                     "built_in": name in _BUILTIN_PROVIDERS,
                 }
             )
@@ -506,7 +508,14 @@ class SettingsOverlay:
                     hint="optional env fallback name",
                 ),
             ],
-            context={"original_name": row["name"] if row else ""},
+            context={
+                "original_name": row["name"] if row else "",
+                # Header settings are YAML/API-managed; editing here keeps them.
+                "preserved_extra_headers": row.get("extra_headers", {}) if row else {},
+                "preserved_session_header": (
+                    row.get("session_id_header", "") if row else ""
+                ),
+            },
         )
 
     def _build_mcp_form(self, row: dict[str, Any] | None) -> FormState:
@@ -645,6 +654,8 @@ class SettingsOverlay:
                     backend_type=values.get("backend_type", "openai"),
                     base_url=values.get("base_url", ""),
                     api_key_env=values.get("api_key_env", ""),
+                    extra_headers=dict(ctx.get("preserved_extra_headers") or {}),
+                    session_id_header=ctx.get("preserved_session_header", ""),
                 )
                 save_backend(backend)
                 self._flash = f"Provider saved: {name}"

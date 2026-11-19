@@ -157,6 +157,8 @@ def _resolve_preset(
             if preset_native_tools is None and provider
             else list(preset_native_tools or [])
         ),
+        extra_headers=deepcopy(provider.extra_headers) if provider else {},
+        session_id_header=provider.session_id_header if provider else "",
     )
 
 
@@ -623,6 +625,8 @@ def list_all() -> list[dict[str, Any]]:
             "extra_body": profile.extra_body or {},
             "retry_policy": profile.retry_policy,
             "base_url": profile.base_url or "",
+            "extra_headers": profile.extra_headers or {},
+            "session_id_header": profile.session_id_header or "",
             "variation_groups": deepcopy(preset.variation_groups if preset else {}),
             "selected_variations": dict(profile.selected_variations or {}),
         }

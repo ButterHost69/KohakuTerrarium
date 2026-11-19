@@ -703,6 +703,33 @@ class TestPresetCrud:
         assert profile.model == "gpt-x"
         assert profile.max_context == 123
 
+    def test_backend_headers_flow_into_resolved_profile(self):
+        save_backend(
+            LLMBackend(
+                name="opencode-go",
+                backend_type="openai",
+                base_url="https://opencode.ai/inference/go/openai/v1",
+                extra_headers={"x-custom": "v"},
+                session_id_header="x-opencode-session",
+            )
+        )
+        save_profile(LLMPreset(name="glm-5.3", model="glm-5.3", provider="opencode-go"))
+        profile = get_profile("opencode-go/glm-5.3")
+        assert profile is not None
+        assert profile.extra_headers == {"x-custom": "v"}
+        assert profile.session_id_header == "x-opencode-session"
+        # The listing payload mirrors both fields for Studio and workers.
+        entry = next(e for e in list_all() if e["provider"] == "opencode-go")
+        assert entry["extra_headers"] == {"x-custom": "v"}
+        assert entry["session_id_header"] == "x-opencode-session"
+
+    def test_profile_without_backend_headers_defaults_empty(self):
+        save_profile(LLMPreset(name="plain", model="m", provider="openai"))
+        profile = get_profile("openai/plain")
+        assert profile is not None
+        assert profile.extra_headers == {}
+        assert profile.session_id_header == ""
+
     def test_user_preset_overrides_builtin_same_key(self):
         # override the built-in (codex, gpt-5.4) with a custom model id
         save_profile(LLMPreset(name="gpt-5.4", model="custom-model", provider="codex"))

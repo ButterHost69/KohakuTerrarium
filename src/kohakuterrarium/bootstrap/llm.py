@@ -220,6 +220,8 @@ def _create_from_profile(profile: LLMProfile) -> LLMProvider:
             api_key=codex_key,
             base_url=codex_base_url,
             extra_body=getattr(profile, "extra_body", None) or None,
+            extra_headers=getattr(profile, "extra_headers", None) or None,
+            session_header=getattr(profile, "session_id_header", "") or "",
         )
         provider._profile_max_context = profile.max_context
         _apply_backend_native_identity(provider, profile)
@@ -232,6 +234,13 @@ def _create_from_profile(profile: LLMProfile) -> LLMProvider:
             raise ValueError("Antigravity: local_host_only")
         if profile.base_url or profile.api_key_env:
             raise ValueError("Antigravity: custom_endpoint_not_supported")
+        if getattr(profile, "extra_headers", None) or getattr(
+            profile, "session_id_header", ""
+        ):
+            logger.warning(
+                "Antigravity ignores configured request headers",
+                profile=profile.name,
+            )
         provider = AntigravityProvider(
             model=profile.model,
             temperature=profile.temperature,
@@ -255,6 +264,8 @@ def _create_from_profile(profile: LLMProfile) -> LLMProvider:
             max_tokens=profile.max_output or None,
             retry_policy=getattr(profile, "retry_policy", None),
             extra_body=getattr(profile, "extra_body", None) or None,
+            extra_headers=getattr(profile, "extra_headers", None) or None,
+            session_header=getattr(profile, "session_id_header", "") or "",
         )
         provider._profile_max_context = profile.max_context
         _apply_backend_native_identity(provider, profile)
@@ -311,6 +322,8 @@ def _create_from_profile(profile: LLMProfile) -> LLMProvider:
             temperature=profile.temperature,
             max_tokens=profile.max_output or None,
             extra_body=profile.extra_body or None,
+            extra_headers=getattr(profile, "extra_headers", None) or None,
+            session_header=getattr(profile, "session_id_header", "") or "",
             service_tier=profile.service_tier or None,
             retry_policy=retry_policy,
         )
@@ -324,6 +337,8 @@ def _create_from_profile(profile: LLMProfile) -> LLMProvider:
             temperature=profile.temperature,
             max_tokens=profile.max_output or None,
             extra_body=profile.extra_body or None,
+            extra_headers=getattr(profile, "extra_headers", None) or None,
+            session_header=getattr(profile, "session_id_header", "") or "",
             retry_policy=retry_policy,
         )
     provider._profile_max_context = profile.max_context

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from kohakuterrarium.api.auth import verify_admin_token
 from kohakuterrarium.studio.identity.llm.backends import (
+    get_backend,
     list_backend_types,
     list_backends,
     remove_backend,
@@ -29,7 +30,12 @@ router = APIRouter()
 
 
 class BackendRequest(BaseModel):
-    """Describe a named LLM backend and its provider capabilities."""
+    """Describe a named LLM backend and its provider capabilities.
+
+    ``extra_headers`` / ``session_id_header`` default to ``None``, meaning
+    "leave the stored value untouched"; an explicit value (``{}`` / ``""``)
+    replaces it. Surfaces that do not manage headers keep them intact.
+    """
 
     name: str
     backend_type: str = "openai"
@@ -37,6 +43,8 @@ class BackendRequest(BaseModel):
     api_key_env: str = ""
     provider_name: str = ""
     provider_native_tools: list[str] = Field(default_factory=list)
+    extra_headers: dict[str, str] | None = None
+    session_id_header: str | None = None
 
 
 class ProfileRequest(BaseModel):
@@ -78,7 +86,23 @@ async def get_backend_types():
 
 @router.post("/backends", dependencies=[Depends(verify_admin_token)])
 async def create_backend(req: BackendRequest):
-    """Validate and persist an LLM backend record."""
+    """Validate and persist an LLM backend record.
+
+    Header settings omitted from the request keep their stored values, so
+    clients that do not manage them (the settings UI) cannot erase a
+    YAML-configured header set.
+    """
+    existing = get_backend(req.name)
+    extra_headers = (
+        req.extra_headers
+        if req.extra_headers is not None
+        else dict(existing.extra_headers) if existing else {}
+    )
+    session_id_header = (
+        req.session_id_header
+        if req.session_id_header is not None
+        else (existing.session_id_header if existing else "")
+    )
     try:
         save_backend_record(
             name=req.name,
@@ -87,6 +111,8 @@ async def create_backend(req: BackendRequest):
             api_key_env=req.api_key_env,
             provider_name=req.provider_name,
             provider_native_tools=list(req.provider_native_tools or []),
+            extra_headers=extra_headers,
+            session_id_header=session_id_header,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

@@ -8,6 +8,7 @@ this module validates and orchestrates Studio operations.
 from typing import Any
 
 from kohakuterrarium.llm.profiles.api_keys import PROVIDER_KEY_MAP
+from kohakuterrarium.llm.headers import validate_header_map, validate_header_name
 from kohakuterrarium.llm.profiles.backend_registry import (
     BUILTIN_BACKEND_TYPES,
     package_backend,
@@ -84,6 +85,8 @@ def list_backends() -> list[dict[str, Any]]:
                 "api_key_env": backend.api_key_env or "",
                 "provider_name": backend.provider_name or "",
                 "provider_native_tools": list(backend.provider_native_tools),
+                "extra_headers": dict(backend.extra_headers or {}),
+                "session_id_header": backend.session_id_header or "",
                 "built_in": name in _BUILT_IN_BACKEND_NAMES,
                 "source": source,
                 "package": descriptor.package if descriptor else "",
@@ -106,6 +109,8 @@ def save_backend_record(
     api_key_env: str = "",
     provider_name: str = "",
     provider_native_tools: list[str] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    session_id_header: str = "",
 ) -> LLMBackend:
     """Validate and persist a backend, raising ``ValueError`` for bad input."""
     if not name or not backend_type:
@@ -119,6 +124,10 @@ def save_backend_record(
         api_key_env=api_key_env or "",
         provider_name=provider_name or "",
         provider_native_tools=list(provider_native_tools or []),
+        extra_headers=validate_header_map(extra_headers),
+        session_id_header=(
+            validate_header_name(session_id_header) if session_id_header else ""
+        ),
     )
     save_backend(backend)
     return backend

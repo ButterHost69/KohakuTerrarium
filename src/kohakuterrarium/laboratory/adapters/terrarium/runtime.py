@@ -13,6 +13,7 @@ from kohakuterrarium.laboratory.adapters.terrarium.runtime_drive import (
     is_drive_verb,
 )
 from kohakuterrarium.laboratory.protocols import LabRegistrar
+from kohakuterrarium.llm.headers import normalize_header_map, normalize_header_name
 from kohakuterrarium.llm.profiles.backends import set_remote_backend
 from kohakuterrarium.llm.presets.store import preset_from_data, set_remote_preset
 from kohakuterrarium.llm.profiles.types import LLMBackend
@@ -236,6 +237,10 @@ class TerrariumRuntimeAdapter:
                 backend_type=backend_type,
                 base_url=profile.get("base_url", "") or "",
                 api_key_env=profile.get("api_key_env", "") or "",
+                extra_headers=normalize_header_map(profile.get("extra_headers")),
+                session_id_header=normalize_header_name(
+                    profile.get("session_id_header")
+                ),
             )
         )
         try:

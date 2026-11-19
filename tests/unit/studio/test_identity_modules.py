@@ -319,6 +319,8 @@ class TestLlmProfiles:
             reasoning_effort="medium",
             service_tier="",
             extra_body={},
+            extra_headers={},
+            session_id_header="",
             selected_variations={"a": "b"},
         )
         monkeypatch.setattr(
@@ -343,6 +345,8 @@ class TestLlmProfiles:
                 "reasoning_effort": "medium",
                 "service_tier": "",
                 "extra_body": {},
+                "extra_headers": {},
+                "session_id_header": "",
                 "variation_groups": {},
                 "selected_variations": {"a": "b"},
             }

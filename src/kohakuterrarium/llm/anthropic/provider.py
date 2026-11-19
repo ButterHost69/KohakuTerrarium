@@ -49,6 +49,7 @@ from kohakuterrarium.llm.base import (
     OverflowRecoveryState,
     ToolSchema,
 )
+from kohakuterrarium.llm.headers import normalize_header_map, normalize_header_name
 from kohakuterrarium.llm.openai.sanitize import log_request_shape, strip_surrogates
 from kohakuterrarium.llm.recovery.errors import (
     RetryPolicy,
@@ -79,6 +80,7 @@ class AnthropicProvider(BaseLLMProvider):
         max_tokens: int | None = None,
         timeout: float = 300.0,
         extra_headers: dict[str, str] | None = None,
+        session_header: str = "",
         extra_body: dict[str, Any] | None = None,
         max_retries: int = 3,
         service_tier: str | None = None,
@@ -111,7 +113,8 @@ class AnthropicProvider(BaseLLMProvider):
         self._api_key = api_key
         self.base_url = base_url or ANTHROPIC_BASE_URL
         self._timeout = timeout
-        self._extra_headers = dict(extra_headers or {})
+        self._extra_headers = normalize_header_map(extra_headers)
+        self.session_header = normalize_header_name(session_header)
         self._max_retries = max_retries
         self._service_tier = service_tier
         self._last_usage: dict[str, int] = {}
@@ -189,6 +192,8 @@ class AnthropicProvider(BaseLLMProvider):
         clone._last_assistant_extra_fields = {}
         clone._emergency_drop_callbacks = list(self._emergency_drop_callbacks)
         clone.prompt_cache_key = self.prompt_cache_key
+        clone.session_id = self.session_id
+        clone.session_header = self.session_header
         clone.auth_as_bearer = self.auth_as_bearer
         clone._client = self._client
         clone.provider_name = getattr(self, "provider_name", clone.provider_name)
@@ -513,9 +518,10 @@ class AnthropicProvider(BaseLLMProvider):
         for key in list(ANTHROPIC_KNOWN_BODY_FIELDS):
             if key in merged_extra:
                 create_kwargs[key] = merged_extra.pop(key)
-        extra_headers = merged_extra.pop("extra_headers", None)
-        if extra_headers:
-            create_kwargs["extra_headers"] = dict(extra_headers)
+        extra_headers = normalize_header_map(merged_extra.pop("extra_headers", None))
+        wire_headers = self.request_headers(extra_headers)
+        if wire_headers:
+            create_kwargs["extra_headers"] = wire_headers
         if self._service_tier and "service_tier" not in create_kwargs:
             create_kwargs["service_tier"] = self._service_tier
         if not disable_cache and is_anthropic_api_endpoint(self.base_url):

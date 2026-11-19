@@ -40,6 +40,8 @@ def list_profiles_payload() -> list[dict[str, Any]]:
             "reasoning_effort": p.reasoning_effort or "",
             "service_tier": p.service_tier or "",
             "extra_body": p.extra_body or {},
+            "extra_headers": p.extra_headers or {},
+            "session_id_header": p.session_id_header or "",
             "variation_groups": (
                 presets[key].variation_groups if key in presets else {}
             ),

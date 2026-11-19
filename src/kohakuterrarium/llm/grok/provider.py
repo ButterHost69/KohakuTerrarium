@@ -9,6 +9,10 @@ from openai import AsyncOpenAI
 from kohakuterrarium.errors import LLMNotConfiguredError
 from kohakuterrarium.llm.base import ToolSchema
 from kohakuterrarium.llm.grok.auth import GROK_CLI_SOURCE, GrokToken, GrokTokens
+from kohakuterrarium.llm.headers import (
+    merge_header_maps,
+    normalize_header_map,
+)
 from kohakuterrarium.llm.openai.provider import OpenAIProvider
 from kohakuterrarium.llm.recovery.errors import RetryPolicy
 from kohakuterrarium.utils.logging import get_logger
@@ -32,11 +36,15 @@ class GrokSubscriptionProvider(OpenAIProvider):
         max_retries: int = 2,
         retry_policy: RetryPolicy | dict[str, Any] | None = None,
         extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        session_header: str = "",
     ) -> None:
         candidates = GrokTokens.load_bootstrap_candidates()
         if not candidates:
             raise _missing_login_error()
         token = candidates[0]
+        # Operator headers must survive every credential-driven rebuild.
+        self._configured_headers = normalize_header_map(extra_headers)
         super().__init__(
             api_key=token.access_token,
             model=model,
@@ -44,7 +52,10 @@ class GrokSubscriptionProvider(OpenAIProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
-            extra_headers=_chat_headers(token, model),
+            extra_headers=merge_header_maps(
+                _chat_headers(token, model), self._configured_headers
+            ),
+            session_header=session_header,
             extra_body=extra_body,
             max_retries=max_retries,
             retry_policy=retry_policy,
@@ -141,17 +152,21 @@ class GrokSubscriptionProvider(OpenAIProvider):
             max_retries=self._max_retries,
             retry_policy=self._retry_policy,
             extra_body=dict(self.extra_body),
+            extra_headers=dict(self._configured_headers),
+            session_header=self.session_header,
         )
         clone._rejected_fingerprints = set(self._rejected_fingerprints)
         self.share_request_ceiling(clone)
         clone._emergency_drop_callbacks = list(self._emergency_drop_callbacks)
         clone.prompt_cache_key = self.prompt_cache_key
+        clone.session_id = self.session_id
         clone._profile_max_context = getattr(self, "_profile_max_context", None)
         return clone
 
     def _reset_fork_state(self) -> None:
         super()._reset_fork_state()
         self._rejected_fingerprints = set(self._rejected_fingerprints)
+        self._configured_headers = dict(self._configured_headers)
 
     def _activate(self, token: GrokToken) -> None:
         fingerprint = _fingerprint(token)
@@ -163,7 +178,9 @@ class GrokSubscriptionProvider(OpenAIProvider):
         self._api_key = token.access_token
         self._base_url_input = token.base_url
         self.base_url = token.base_url
-        headers = _chat_headers(token, self.config.model)
+        headers = merge_header_maps(
+            _chat_headers(token, self.config.model), self._configured_headers
+        )
         self._extra_headers = headers
         self._client = AsyncOpenAI(
             api_key=token.access_token,

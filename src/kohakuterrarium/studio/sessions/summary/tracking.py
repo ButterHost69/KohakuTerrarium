@@ -11,6 +11,7 @@ from typing import Any
 
 from kohakuterrarium.bootstrap.llm import create_llm_from_profile_name
 from kohakuterrarium.core.compact.manager import CompactConfig
+from kohakuterrarium.llm.base import bind_llm_session
 from kohakuterrarium.studio.identity.session_summary import SummarySettings
 from kohakuterrarium.studio.sessions.summary.hook import SummaryHook
 from kohakuterrarium.terrarium.session.observers import observe_session_stores
@@ -80,7 +81,16 @@ def attach(engine: Any, store: Any) -> SummaryHook | None:
         key = (name, settings.model, id(getattr(agent, "llm", None)))
         if key not in providers:
             providers.clear()
-            providers[key] = summary_llm(agent, settings)
+            provider = summary_llm(agent, settings)
+            # The summary provider speaks for this session's conversation;
+            # without the binding a session-header gateway would reject it.
+            session_id = ""
+            try:
+                session_id = store.session_id
+            except Exception:
+                session_id = ""
+            bind_llm_session(provider, session_id)
+            providers[key] = provider
         return providers[key]
 
     hook = SummaryHook(store, loop=loop, llm_for=llm_for)

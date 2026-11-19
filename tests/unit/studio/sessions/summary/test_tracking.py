@@ -86,6 +86,9 @@ async def test_llm_source_calls_a_separate_provider_with_the_summary_prompt(
             )
         ]
         assert summary_calls and creature.agent.llm not in summary_calls
+        # The summary provider speaks for this session's conversation; a
+        # session-header gateway would reject it without the binding.
+        assert first.session_id == store.session_id
     finally:
         await engine.shutdown()
 

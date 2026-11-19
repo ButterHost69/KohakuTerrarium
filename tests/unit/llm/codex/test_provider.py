@@ -106,6 +106,55 @@ class TestApiKeyMode:
         assert clone._token_lock is p._token_lock
 
 
+class TestSessionHeaders:
+    def test_oauth_mode_merges_static_config_and_codex_session_header(self):
+        p = CodexOAuthProvider(
+            model="gpt-x",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        )
+        p.bind_session("abc123")
+        headers = p._session_headers("cache-key-1")
+        assert headers == {
+            "x-static": "s",
+            "session_id": "cache-key-1",
+            "x-opencode-session": "abc123",
+        }
+
+    def test_api_key_mode_keeps_codex_session_header_off(self):
+        p = CodexOAuthProvider(
+            model="gpt-x",
+            api_key="sk-custom",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        )
+        p.bind_session("abc123")
+        headers = p._session_headers("cache-key-1")
+        # Third-party Responses endpoints reject Codex's internal header;
+        # only operator-configured headers are sent.
+        assert headers == {"x-static": "s", "x-opencode-session": "abc123"}
+
+    def test_unbound_provider_sends_only_configured_headers(self):
+        p = CodexOAuthProvider(model="gpt-x", extra_headers={"x-static": "s"})
+        assert p._session_headers("cache-key-1") == {
+            "x-static": "s",
+            "session_id": "cache-key-1",
+        }
+
+    def test_with_model_keeps_headers_and_session_binding(self):
+        p = CodexOAuthProvider(
+            model="a",
+            api_key="sk-custom",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        )
+        p.bind_session("abc123")
+        clone = p.with_model("b")
+        assert clone._extra_headers == {"x-static": "s"}
+        assert clone.session_header == "x-opencode-session"
+        assert clone.session_id == "abc123"
+
+
 class TestOAuthMode:
     async def test_oauth_mode_uses_codex_base_url_and_token(self, monkeypatch):
         # No api_key -> OAuth path. Stub token load so no browser login runs.

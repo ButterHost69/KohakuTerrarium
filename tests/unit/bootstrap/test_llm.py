@@ -155,6 +155,49 @@ class TestCreateLLMProviderProfilePath:
         out = create_llm_provider(cfg)
         assert isinstance(out, _StubProvider)
 
+    def test_profile_headers_reach_openai_provider(self, monkeypatch):
+        captured = {}
+
+        class _FakeProfile:
+            name = "test"
+            provider = "openai"
+            backend_type = "openai"
+            model = "test-model"
+            reasoning_effort = None
+            service_tier = None
+            retry_policy = None
+            max_context = 8000
+            backend_provider_name = ""
+            backend_native_tools = None
+            api_key_env = ""
+            base_url = "http://h/v1"
+            temperature = None
+            max_output = 0
+            extra_body = {}
+            extra_headers = {"x-custom": "v"}
+            session_id_header = "x-opencode-session"
+
+        monkeypatch.setattr(
+            llm_mod, "resolve_controller_llm", lambda *a, **kw: _FakeProfile()
+        )
+        monkeypatch.setattr(llm_mod, "get_api_key", lambda name: "test-key")
+
+        import kohakuterrarium.llm.openai.provider as openai_provider
+
+        original = openai_provider.OpenAIProvider
+
+        class _CapturingProvider(original):
+            def __init__(self, **kw):
+                captured.update(kw)
+                super().__init__(**kw)
+
+        monkeypatch.setattr(openai_provider, "OpenAIProvider", _CapturingProvider)
+        cfg = AgentConfig(name="a", model="m")
+        provider = create_llm_provider(cfg)
+        assert isinstance(provider, _CapturingProvider)
+        assert captured["extra_headers"] == {"x-custom": "v"}
+        assert captured["session_header"] == "x-opencode-session"
+
 
 class TestCreateLLMProviderInlinePath:
     def test_no_model_raises(self, monkeypatch):

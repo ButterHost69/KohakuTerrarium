@@ -14,6 +14,7 @@ from kohakuterrarium.llm.base import (
     NativeToolCall,
     ToolSchema,
 )
+from kohakuterrarium.llm.headers import normalize_header_map, normalize_header_name
 from kohakuterrarium.llm.media.artifacts import resolve_message_image_urls
 from kohakuterrarium.llm.openai.helpers import (
     delta_field,
@@ -38,6 +39,9 @@ class LiteLLMProvider(BaseLLMProvider):
         model: str = "openai/gpt-4o",
         api_key: str | None = None,
         config: LLMConfig | None = None,
+        *,
+        extra_headers: dict[str, str] | None = None,
+        session_header: str = "",
         **kwargs: Any,
     ) -> None:
         effective_config = config or LLMConfig(model=model)
@@ -46,6 +50,8 @@ class LiteLLMProvider(BaseLLMProvider):
         super().__init__(effective_config)
         self._api_key = api_key
         self._extra_kwargs = kwargs
+        self._extra_headers = normalize_header_map(extra_headers)
+        self.session_header = normalize_header_name(session_header)
         self._last_assistant_extra_fields: dict[str, Any] = {}
 
     def with_model(self, name: str) -> "LiteLLMProvider":
@@ -64,6 +70,8 @@ class LiteLLMProvider(BaseLLMProvider):
             model=name,
             api_key=self._api_key,
             config=new_config,
+            extra_headers=dict(self._extra_headers),
+            session_header=self.session_header,
             **self._extra_kwargs,
         )
 
@@ -281,6 +289,10 @@ class LiteLLMProvider(BaseLLMProvider):
 
         if self._api_key:
             params["api_key"] = self._api_key
+
+        wire_headers = self.request_headers()
+        if wire_headers:
+            params["extra_headers"] = wire_headers
 
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         if max_tokens is not None:

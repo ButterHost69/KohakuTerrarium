@@ -260,3 +260,60 @@ class TestRequestAfterClose:
         assert "".join([chunk async for chunk in provider.chat(MESSAGES)]) == ANSWER
         assert provider._client is not closed
         await provider.close()
+
+
+class TestRequestHeaders:
+    def test_session_header_reaches_create_kwargs(self):
+        provider = AnthropicProvider(
+            api_key="k", model="m", session_header="x-opencode-session"
+        )
+        provider.bind_session("abc123")
+        create = provider._build_create_kwargs(MESSAGES, stream=True)
+        assert create["extra_headers"] == {"x-opencode-session": "abc123"}
+
+    def test_static_and_preset_headers_merge_with_session_last(self):
+        provider = AnthropicProvider(
+            api_key="k",
+            model="m",
+            extra_headers={"x-static": "s"},
+            session_header="x-session",
+        )
+        provider.bind_session("abc123")
+        create = provider._build_create_kwargs(
+            MESSAGES, stream=True, extra_body={"extra_headers": {"x-beta": "1"}}
+        )
+        assert create["extra_headers"] == {
+            "x-static": "s",
+            "x-beta": "1",
+            "x-session": "abc123",
+        }
+
+    def test_unbound_or_unconfigured_provider_sends_no_headers(self):
+        provider = AnthropicProvider(api_key="k", model="m")
+        create = provider._build_create_kwargs(MESSAGES, stream=True)
+        assert "extra_headers" not in create
+
+        bound = AnthropicProvider(api_key="k", model="m")
+        bound.bind_session("abc123")
+        create = bound._build_create_kwargs(MESSAGES, stream=True)
+        assert "extra_headers" not in create
+
+    def test_preset_headers_alone_still_reach_the_wire(self):
+        provider = AnthropicProvider(api_key="k", model="m")
+        create = provider._build_create_kwargs(
+            MESSAGES, stream=True, extra_body={"extra_headers": {"x-beta": "1"}}
+        )
+        assert create["extra_headers"] == {"x-beta": "1"}
+
+    def test_with_model_keeps_headers_and_session_binding(self):
+        provider = AnthropicProvider(
+            api_key="k",
+            model="m",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        )
+        provider.bind_session("abc123")
+        clone = provider.with_model("m2")
+        assert clone.session_header == "x-opencode-session"
+        assert clone.session_id == "abc123"
+        assert clone._extra_headers == {"x-static": "s"}

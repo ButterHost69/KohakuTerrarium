@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Protocol, runtime_checkable
 
+from kohakuterrarium.llm.headers import merge_header_maps
 from kohakuterrarium.llm.message import Message
 from kohakuterrarium.llm.recovery.context_repair import (
     CONTENT_REPAIR_LADDER,
@@ -165,6 +166,27 @@ def fork_llm(llm: "LLMProvider") -> "LLMProvider":
     return fork() if callable(fork) else llm
 
 
+def bind_llm_session(llm: Any, session_id: str) -> None:
+    """Bind the host conversation identity onto any provider-like object.
+
+    Real providers implement ``bind_session``; plain objects accept
+    dynamic attributes — ``session_id`` plus the legacy ``prompt_cache_key``
+    slot when present — and objects that reject the attribute are skipped.
+    """
+    if not session_id or llm is None:
+        return
+    binder = getattr(llm, "bind_session", None)
+    if callable(binder):
+        binder(session_id)
+        return
+    try:
+        llm.session_id = session_id
+        if hasattr(llm, "prompt_cache_key"):
+            llm.prompt_cache_key = session_id
+    except Exception:
+        pass
+
+
 @dataclass
 class OverflowRecoveryState:
     """Track the bounded stages of overflow, oversize and content recovery for one request."""
@@ -203,6 +225,11 @@ class BaseLLMProvider:
 
     # Supported native tools auto-register unless the creature explicitly disables them.
     provider_native_tools: frozenset[str] = frozenset()
+
+    # Host conversation identity for session headers; ``None`` until bound.
+    session_id: str | None = None
+    # Header name that carries ``session_id`` on every request.
+    session_header: str = ""
 
     def __init__(self, config: LLMConfig | None = None):
         self.config = config or LLMConfig(model="")
@@ -453,6 +480,34 @@ class BaseLLMProvider:
     def reload_credentials(self) -> bool:
         """Rebuild provider credentials when supported, reporting whether they changed."""
         return False
+
+    def bind_session(self, session_id: str) -> None:
+        """Bind the host conversation identity for headers and cache routing.
+
+        ``prompt_cache_key`` follows the session id, preserving the
+        pre-existing cache-routing behavior. A transport that already
+        connected under a different binding captured stale headers and is
+        dropped so the next request reconnects; a transport that never
+        connected keeps its state untouched.
+        """
+        if not session_id or session_id == self.session_id:
+            return
+        self.session_id = session_id
+        if hasattr(self, "prompt_cache_key"):
+            self.prompt_cache_key = session_id
+        self._reset_session_transport()
+
+    def _reset_session_transport(self) -> None:
+        """Drop transport state tied to a previous session; providers override."""
+
+    def request_headers(
+        self, overrides: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        """Static plus per-request headers, with the session header stamped last."""
+        headers = merge_header_maps(getattr(self, "_extra_headers", None), overrides)
+        if self.session_id and self.session_header:
+            headers = merge_header_maps(headers, {self.session_header: self.session_id})
+        return headers
 
     def translate_provider_native_tool(self, tool: Any) -> dict | None:
         """Return a provider-native wire schema, or ``None`` if unsupported."""

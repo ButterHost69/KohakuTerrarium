@@ -5460,6 +5460,90 @@ class TestPublishSessionInfoCacheKey:
         finally:
             await agent.stop()
 
+    async def test_start_binds_session_id_on_llm(self, make_agent, tmp_path):
+        from kohakuterrarium.session.store import SessionStore
+
+        store = SessionStore(str(tmp_path / "s.kohakutr.v2"))
+        store.init_meta(
+            session_id="abc123",
+            config_type="agent",
+            config_path="x",
+            pwd=str(tmp_path),
+            agents=["test_agent"],
+        )
+        agent = make_agent()
+        agent.attach_session_store(store)
+        await agent.start()
+        try:
+            assert agent._session_id == "abc123"
+            assert agent.llm.session_id == "abc123"
+        finally:
+            await agent.stop()
+
+    async def test_store_attached_after_start_rebinds_llm(self, make_agent, tmp_path):
+        from kohakuterrarium.session.store import SessionStore
+
+        store = SessionStore(str(tmp_path / "late.kohakutr.v2"))
+        store.init_meta(
+            session_id="late1",
+            config_type="agent",
+            config_path="x",
+            pwd=str(tmp_path),
+            agents=["test_agent"],
+        )
+        agent = make_agent()
+        # Declare the legacy cache slot so binding must refresh it too.
+        agent.llm.prompt_cache_key = ""
+        await agent.start()
+        try:
+            # Before any store exists the agent binds its in-process fallback.
+            assert agent.llm.session_id == agent._fallback_session_id
+            agent.attach_session_store(store)
+            assert agent.llm.session_id == "late1"
+            assert agent.llm.prompt_cache_key == "late1"
+        finally:
+            await agent.stop()
+
+    async def test_switch_model_rebinds_session_on_new_llm(
+        self, make_agent, tmp_path, monkeypatch
+    ):
+        from kohakuterrarium.core.agent import model as model_mod
+        from kohakuterrarium.llm.profiles.types import LLMProfile
+        from kohakuterrarium.session.store import SessionStore
+        from kohakuterrarium.testing.llm import ScriptedLLM
+
+        store = SessionStore(str(tmp_path / "s.kohakutr.v2"))
+        store.init_meta(
+            session_id="abc123",
+            config_type="agent",
+            config_path="x",
+            pwd=str(tmp_path),
+            agents=["test_agent"],
+        )
+        agent = make_agent()
+        agent.attach_session_store(store)
+        await agent.start()
+        try:
+            monkeypatch.setattr(
+                model_mod,
+                "resolve_controller_llm",
+                lambda *a, **kw: LLMProfile(name="p", model="m", provider="openai"),
+            )
+            monkeypatch.setattr(
+                model_mod, "profile_to_identifier", lambda profile: "openai/p"
+            )
+            monkeypatch.setattr(
+                model_mod,
+                "create_llm_from_profile_name",
+                lambda name: ScriptedLLM(["OK"]),
+            )
+            agent.switch_model("openai/p")
+            assert agent.llm is not None
+            # The fresh provider inherits the conversation identity.
+            assert agent.llm.session_id == "abc123"
+        finally:
+            await agent.stop()
+
 
 # ── _promote_handle off-loop branch (lines 631-637) ────────────
 

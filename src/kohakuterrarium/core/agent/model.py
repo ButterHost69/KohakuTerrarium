@@ -92,6 +92,13 @@ class AgentModelMixin:
                 self.compact_manager.config.max_tokens = new_max
             self._wire_overflow_rescue()
 
+        # Fresh providers inherit the conversation identity so session headers
+        # and cache routing survive a model switch. Hosts assembled without
+        # the session surface (duck-typed test agents) skip the binding.
+        binder = getattr(self, "_bind_llm_session", None)
+        if callable(binder):
+            binder(new_llm)
+
         model_name = getattr(new_llm, "model", profile_name)
         logger.info(
             "Model switched",

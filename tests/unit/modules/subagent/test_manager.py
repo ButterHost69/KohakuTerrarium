@@ -12,6 +12,7 @@ import pytest
 from kohakuterrarium.core.budget import IterationBudget
 from kohakuterrarium.core.jobs.job import JobState, JobType
 from kohakuterrarium.core.registry import Registry
+from kohakuterrarium.modules.subagent import manager as subagent_manager
 from kohakuterrarium.modules.subagent.config import SubAgentConfig
 from kohakuterrarium.modules.subagent.manager import SubAgentManager
 from kohakuterrarium.modules.subagent.result import SubAgentResult
@@ -105,6 +106,24 @@ class TestSpawn:
         status = mgr.get_status(job_id)
         assert status.state is JobState.DONE
         assert status.job_type is JobType.SUBAGENT
+
+    async def test_spawn_binds_parent_session_to_a_fresh_subagent_llm(
+        self, monkeypatch
+    ):
+        parent = ScriptedLLM(["ok"])
+        parent.session_id = "abc123"
+        fresh = ScriptedLLM(["sub-agent finished the task"])
+
+        def fake_resolve(parent_llm, config):
+            return fresh
+
+        monkeypatch.setattr(subagent_manager, "resolve_llm", fake_resolve)
+        mgr = _manager(parent)
+        mgr.register(SubAgentConfig(name="explore", max_turns=2))
+        await mgr.spawn("explore", "find the bug", background=False)
+        # A fresh provider still belongs to the host conversation; its
+        # session header must match the parent's binding.
+        assert fresh.session_id == "abc123"
 
     async def test_post_hook_updates_persisted_canonical_metadata(self, tmp_path):
         class _Plugins:

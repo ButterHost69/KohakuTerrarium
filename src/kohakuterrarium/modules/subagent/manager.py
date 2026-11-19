@@ -12,7 +12,7 @@ from kohakuterrarium.core.jobs.job import JobState, JobStatus, JobStore, JobType
 from kohakuterrarium.core.jobs.job import generate_job_id
 from kohakuterrarium.core.loader import ModuleLoader
 from kohakuterrarium.core.registry import Registry
-from kohakuterrarium.llm.base import LLMProvider
+from kohakuterrarium.llm.base import LLMProvider, bind_llm_session
 from kohakuterrarium.modules.subagent.base import SubAgent, SubAgentJob, SubAgentResult
 from kohakuterrarium.modules.subagent.config import SubAgentConfig, SubAgentInfo
 from kohakuterrarium.modules.subagent.fork_policy import ForkToolPolicy
@@ -188,6 +188,9 @@ class SubAgentManager(SideConversationMixin, InteractiveManagerMixin):
             config, self._loader, self._default_plugin_specs, strict=self._strict
         )
         llm = resolve_llm(self.llm, config)
+        # A sub-agent resolved to a fresh provider still belongs to the host
+        # conversation; its session header must match the parent's binding.
+        bind_llm_session(llm, getattr(self.llm, "session_id", ""))
         if snapshot is not None and llm is self.llm:
             raise ValueError(
                 "This provider cannot create an isolated context fork; implement fork()"

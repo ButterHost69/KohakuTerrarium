@@ -1,6 +1,7 @@
 """Agent session surface: store attachment, session info, prompt and state views."""
 
 from typing import Any
+from uuid import uuid4
 
 from kohakuterrarium.core.agent.history.compact import (
     restore_compact_state_from_session,
@@ -18,6 +19,7 @@ from kohakuterrarium.core.conversation.pinned import (
     sync_with_store as sync_pinned_with_store,
 )
 from kohakuterrarium.core.token_ledger import context_window
+from kohakuterrarium.llm.base import bind_llm_session
 from kohakuterrarium.session.attach.agent import attach_to_session as _attach_to_session
 from kohakuterrarium.session.attach.agent import (
     detach_from_session as _detach_from_session,
@@ -36,6 +38,29 @@ class AgentSessionMixin:
         self.session_store: Any = None
         self._session_output: Any = None
         self._pending_resume_events: list[dict] | None = None
+        # Persisted conversation identity pushed into providers; "" until attached.
+        self._session_id = ""
+        # In-process identity for agents that never attach a session store.
+        self._fallback_session_id = uuid4().hex
+
+    def _bind_llm_session(self, llm: Any = None) -> None:
+        """Push the conversation identity into the active and compact providers.
+
+        Providers read ``session_id`` when stamping a configured session
+        header; the fallback keeps that header present even before (or
+        without) a persisted session store. Agents assembled without the
+        session state (duck-typed hosts) simply skip the binding.
+        """
+        session_id = getattr(self, "_session_id", "") or getattr(
+            self, "_fallback_session_id", ""
+        )
+        if not session_id:
+            return
+        target = llm or self.llm
+        bind_llm_session(target, session_id)
+        compact_llm = getattr(getattr(self, "compact_manager", None), "_llm", None)
+        if compact_llm is not None and compact_llm is not target:
+            bind_llm_session(compact_llm, session_id)
 
     def _publish_session_info(self) -> None:
         """Publish session info to output (for TUI session panel).
@@ -46,14 +71,14 @@ class AgentSessionMixin:
         session_id = ""
         if self.session_store:
             try:
-                meta = self.session_store.load_meta()
-                session_id = meta.get("session_id", "")
+                session_id = self.session_store.session_id
             except Exception as e:
                 logger.warning(
                     "Failed to load session meta for session_id",
                     error=str(e),
                     exc_info=True,
                 )
+        self._session_id = session_id
 
         # Save selected preset/profile name to session state for resume
         selected_llm_name = self._llm_selector or self.config.llm_profile or ""
@@ -62,10 +87,10 @@ class AgentSessionMixin:
                 selected_llm_name
             )
 
-        # Set prompt_cache_key on LLM provider for cache routing
-        if session_id and hasattr(self.llm, "prompt_cache_key"):
-            self.llm.prompt_cache_key = session_id
-            logger.info("Prompt cache key set", cache_key=session_id[:16])
+        # Bind the conversation identity for provider headers and cache routing.
+        self._bind_llm_session()
+        if session_id:
+            logger.info("Provider session bound", cache_key=session_id[:16])
 
         # Save embedding config to session state for search_memory tool and resume
         if self.session_store:
@@ -145,6 +170,17 @@ class AgentSessionMixin:
         if store is None:
             return
         sync_pinned_with_store(self, store)
+        # A store attached after start (non-interactive runs) still owns the
+        # conversation identity; push it into every live provider.
+        try:
+            self._session_id = store.session_id
+        except Exception as e:
+            logger.warning(
+                "session_id read failed on attach",
+                error=str(e),
+                exc_info=True,
+            )
+        self._bind_llm_session()
         if self.compact_manager:
             restore_compact_state_from_session(
                 self.compact_manager, store, self.config.name

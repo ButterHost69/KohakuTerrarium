@@ -963,6 +963,9 @@ backends:
     api_key_env: str
     provider_name: str                  # compatibility identity for native tools
     provider_native_tools: [str, ...]   # auto-injected native tools this backend serves
+    extra_headers:                      # optional; static headers on every request
+      <header-name>: str
+    session_id_header: str              # optional; receives the active session id
 
 presets:
   <preset-name>:
@@ -1076,7 +1079,44 @@ an Anthropic-compatible `/v1/messages` API. API keys are resolved first from
 `~/.kohakuterrarium/api_keys.yaml` (`kt login <provider-name>` /
 `kt config key set <provider-name>`) and then from `api_key_env`.
 Anthropic backend presets can pass SDK request fields through `extra_body`;
-for provider beta headers, set `extra_body.extra_headers` on the preset.
+for provider beta headers, set `extra_body.extra_headers` on the preset —
+the OpenAI-compatible transport honors the same key.
+
+#### Provider request headers and the session header
+
+Two backend fields control the HTTP headers sent with every model request:
+
+```yaml
+backends:
+  opencode-go:
+    backend_type: openai
+    base_url: https://opencode.ai/inference/go/openai/v1
+    api_key_env: OPENCODE_API_KEY
+    session_id_header: x-opencode-session
+    extra_headers:
+      User-Agent: my-kohakuterrarium/1.0
+```
+
+- `extra_headers` is a static map merged onto every request (streaming,
+  non-streaming, and WebSocket transport where the endpoint supports it).
+  Values may reference environment variables with `${VAR}` interpolation
+  at provider construction, like `base_url`.
+- `session_id_header` names one header that receives the active session
+  identity. The value is the persisted `session_id` of the agent's session
+  store — stable across resume, and regenerated for forks — so gateways
+  such as OpenCode Go can route and prompt-cache per conversation. An
+  agent without a session store sends a per-process UUID instead, so the
+  header is never silently absent. Sub-agents, compaction, and session
+  summaries that use a different model inherit the same identity.
+
+Precedence per request: preset `extra_body.extra_headers` over the
+backend's static `extra_headers`, and the session header last — so a
+configured `session_id_header` always wins, including over a static
+entry that spells the same name with different casing (one header is
+sent, never two). Header names and values are validated on save;
+invalid rows are rejected rather than sent. The Codex transport keeps
+sending its own OAuth `session_id` header and only adds what you
+configure; the Antigravity transport ignores header settings entirely.
 
 The direct Anthropic provider prepares inline images before both streaming and
 non-streaming requests, including images nested in tool results. Supported static

@@ -603,3 +603,151 @@ class TestRequestAfterClose:
         assert await _turn(provider, streaming) == "ok"
         assert provider._client is not closed
         await provider.close()
+
+
+class TestRequestHeaders:
+    """Configured headers reach the wire on both transports, session-bound."""
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    async def test_session_and_static_headers_reach_the_wire(self, streaming):
+        requests = []
+
+        async def respond(request):
+            requests.append(request)
+            return _success(streaming)
+
+        async with OpenAIProvider(
+            api_key="test",
+            model="test",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        ) as provider:
+            await _attach_transport(provider, respond)
+            provider.bind_session("abc123")
+            assert await _turn(provider, streaming) == "ok"
+
+        assert len(requests) == 1
+        assert requests[0].headers["x-opencode-session"] == "abc123"
+        assert requests[0].headers["x-static"] == "s"
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    async def test_unbound_provider_sends_no_session_header(self, streaming):
+        requests = []
+
+        async def respond(request):
+            requests.append(request)
+            return _success(streaming)
+
+        async with OpenAIProvider(
+            api_key="test",
+            model="test",
+            session_header="x-opencode-session",
+        ) as provider:
+            await _attach_transport(provider, respond)
+            assert await _turn(provider, streaming) == "ok"
+
+        assert "x-opencode-session" not in requests[0].headers
+
+    async def test_preset_extra_body_headers_go_to_headers_not_body(self):
+        requests = []
+
+        async def respond(request):
+            requests.append(request)
+            return _success(False)
+
+        async with OpenAIProvider(
+            api_key="test",
+            model="test",
+            extra_body={"extra_headers": {"x-beta": "1"}, "custom_flag": True},
+        ) as provider:
+            await _attach_transport(provider, respond)
+            assert await _turn(provider, False) == "ok"
+
+        request = requests[0]
+        assert request.headers["x-beta"] == "1"
+        body = json.loads(request.content)
+        assert "extra_headers" not in body
+        assert body["custom_flag"] is True
+
+    async def test_session_header_overrides_a_static_casing_duplicate(self):
+        requests = []
+
+        async def respond(request):
+            requests.append(request)
+            return _success(True)
+
+        async with OpenAIProvider(
+            api_key="test",
+            model="test",
+            extra_headers={"X-Opencode-Session": "static"},
+            session_header="x-opencode-session",
+        ) as provider:
+            await _attach_transport(provider, respond)
+            provider.bind_session("abc123")
+            assert await _turn(provider, True) == "ok"
+
+        # httpx folds the default and request headers case-insensitively;
+        # the session binding must win over the static value.
+        assert requests[0].headers["x-opencode-session"] == "abc123"
+
+    def test_with_model_keeps_headers_and_session_binding(self):
+        provider = OpenAIProvider(
+            api_key="test",
+            model="m",
+            extra_headers={"x-static": "s"},
+            session_header="x-opencode-session",
+        )
+        provider.bind_session("abc123")
+        clone = provider.with_model("m2")
+        assert clone.session_header == "x-opencode-session"
+        assert clone.session_id == "abc123"
+        assert clone._extra_headers == {"x-static": "s"}
+        assert clone.request_headers() == {
+            "x-static": "s",
+            "x-opencode-session": "abc123",
+        }
+
+    def test_bind_session_keeps_an_unconnected_ws_session(self):
+        from kohakuterrarium.llm.responses.ws import ResponsesWSSession
+
+        provider = OpenAIProvider(api_key="test", model="m", session_header="x-s")
+        provider._ws_session = ResponsesWSSession(lambda: None)
+        provider.bind_session("abc123")
+        # Nothing connected yet, so no headers were captured; keep the session.
+        assert provider._ws_session is not None
+
+    async def test_bind_session_drops_a_connected_ws_session_with_stale_binding(
+        self,
+    ):
+        class _ConnectedSession:
+            _connection = object()
+            closed = False
+
+            async def close(self, *, grace: float | None = None) -> None:
+                self.closed = True
+
+        provider = OpenAIProvider(api_key="test", model="m", session_header="x-s")
+        session = _ConnectedSession()
+        provider._ws_session = session
+        provider._ws_session_binding = None
+        provider.bind_session("abc123")
+        # The socket captured no binding; reconnecting picks up the header.
+        assert provider._ws_session is None
+        await asyncio.sleep(0)
+        assert session.closed
+
+    async def test_bind_session_keeps_a_connected_ws_session_under_same_binding(self):
+        class _ConnectedSession:
+            _connection = object()
+            closed = False
+
+            async def close(self, *, grace: float | None = None) -> None:
+                self.closed = True
+
+        provider = OpenAIProvider(api_key="test", model="m", session_header="x-s")
+        session = _ConnectedSession()
+        provider._ws_session = session
+        provider._ws_session_binding = "abc123"
+        provider.bind_session("abc123")
+        assert provider._ws_session is session
+        assert not session.closed

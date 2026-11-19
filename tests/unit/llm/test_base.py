@@ -16,6 +16,7 @@ from kohakuterrarium.llm.base import (
     NativeToolCall,
     OverflowRecoveryState,
     ToolSchema,
+    bind_llm_session,
     fork_llm,
 )
 from kohakuterrarium.llm.message import Message
@@ -426,6 +427,121 @@ class TestWithModel:
         provider = _StubProvider(LLMConfig(model="gpt-x"))
         with pytest.raises(ValueError, match="cannot switch"):
             provider.with_model("gpt-y")
+
+
+class _HeadersProvider(BaseLLMProvider):
+    """Minimal concrete provider exercising session binding and headers."""
+
+    def __init__(self):
+        super().__init__(LLMConfig(model="m"))
+        self.prompt_cache_key = ""
+        self._extra_headers = {"x-static": "s"}
+        self.reset_calls = 0
+
+    def _reset_session_transport(self) -> None:
+        self.reset_calls += 1
+
+    async def _stream_chat(self, messages, *, tools=None, **kw):
+        yield ""
+
+    async def _complete_chat(self, messages, **kw):
+        return ChatResponse(content="", finish_reason="stop", usage={}, model="m")
+
+
+class TestSessionBinding:
+    def test_bind_session_sets_id_and_cache_key_and_resets_transport(self):
+        provider = _HeadersProvider()
+        provider.bind_session("abc123")
+        assert provider.session_id == "abc123"
+        assert provider.prompt_cache_key == "abc123"
+        assert provider.reset_calls == 1
+
+    def test_bind_session_ignores_empty_and_duplicate_ids(self):
+        provider = _HeadersProvider()
+        provider.bind_session("")
+        assert provider.session_id is None
+        provider.bind_session("abc123")
+        provider.bind_session("abc123")
+        assert provider.reset_calls == 1
+
+    def test_request_headers_layers_static_overrides_then_session(self):
+        provider = _HeadersProvider()
+        provider.session_header = "x-opencode-session"
+        provider.bind_session("abc123")
+        headers = provider.request_headers({"x-beta": "1"})
+        assert headers == {
+            "x-static": "s",
+            "x-beta": "1",
+            "x-opencode-session": "abc123",
+        }
+
+    def test_request_headers_session_overrides_static_casing_duplicate(self):
+        provider = _HeadersProvider()
+        provider._extra_headers = {"X-Opencode-Session": "static"}
+        provider.session_header = "x-opencode-session"
+        provider.bind_session("abc123")
+        assert provider.request_headers() == {"x-opencode-session": "abc123"}
+
+    def test_request_headers_empty_without_configuration(self):
+        provider = _HeadersProvider()
+        assert provider.request_headers() == {"x-static": "s"}
+        provider._extra_headers = {}
+        assert provider.request_headers() == {}
+
+    def test_unbound_provider_sends_no_session_header(self):
+        provider = _HeadersProvider()
+        provider.session_header = "x-opencode-session"
+        assert provider.request_headers() == {"x-static": "s"}
+
+    def test_fork_keeps_session_binding(self):
+        provider = _HeadersProvider()
+        provider.session_header = "x-opencode-session"
+        provider.bind_session("abc123")
+        fork = provider.fork()
+        assert fork.session_id == "abc123"
+        assert fork.session_header == "x-opencode-session"
+        assert fork.request_headers() == {
+            "x-static": "s",
+            "x-opencode-session": "abc123",
+        }
+
+
+class TestBindLLMSession:
+    def test_real_provider_uses_bind_session(self):
+        provider = _HeadersProvider()
+        bind_llm_session(provider, "abc123")
+        assert provider.session_id == "abc123"
+
+    def test_plain_object_gets_dynamic_attributes(self):
+        class _Fake:
+            prompt_cache_key = ""
+
+        fake = _Fake()
+        bind_llm_session(fake, "abc123")
+        assert fake.session_id == "abc123"
+        assert fake.prompt_cache_key == "abc123"
+
+    def test_object_without_cache_slot_only_gets_session_id(self):
+        class _Fake:
+            pass
+
+        fake = _Fake()
+        bind_llm_session(fake, "abc123")
+        assert fake.session_id == "abc123"
+        assert not hasattr(fake, "prompt_cache_key")
+
+    def test_empty_session_id_is_a_no_op(self):
+        provider = _HeadersProvider()
+        bind_llm_session(provider, "")
+        assert provider.session_id is None
+
+    def test_attribute_rejection_is_swallowed(self):
+        class _Frozen:
+            @property
+            def session_id(self):
+                return ""
+
+        bind_llm_session(_Frozen(), "abc123")  # Must not raise.
 
 
 class TestBaseProviderAbstractMethods:

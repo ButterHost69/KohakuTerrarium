@@ -22,6 +22,11 @@ from kohakuterrarium.llm.base import (
     OverflowRecoveryState,
     ToolSchema,
 )
+from kohakuterrarium.llm.headers import (
+    merge_header_maps,
+    normalize_header_map,
+    normalize_header_name,
+)
 from kohakuterrarium.llm.media.artifacts import resolve_message_image_urls
 from kohakuterrarium.llm.openai.helpers import (
     TOOL_CALL_EXTRA_KEY,
@@ -87,6 +92,7 @@ class OpenAIProvider(BaseLLMProvider):
         max_tokens: int | None = None,
         timeout: float = 120.0,
         extra_headers: dict[str, str] | None = None,
+        session_header: str = "",
         extra_body: dict[str, Any] | None = None,
         max_retries: int = 3,
         echo_reasoning: bool = True,
@@ -120,7 +126,8 @@ class OpenAIProvider(BaseLLMProvider):
         self._api_key = api_key
         self._base_url_input = base_url
         self._timeout = timeout
-        self._extra_headers = extra_headers or {}
+        self._extra_headers = normalize_header_map(extra_headers)
+        self.session_header = normalize_header_name(session_header)
         self._max_retries = 0
         self._last_usage: dict[str, int] = {}
         self._last_assistant_extra_fields: dict[str, Any] = {}
@@ -182,6 +189,25 @@ class OpenAIProvider(BaseLLMProvider):
     def _reset_fork_state(self) -> None:
         self._ws_session = None
 
+    def _reset_session_transport(self) -> None:
+        """Drop a connected WS session whose captured headers are stale.
+
+        A session that never connected, or one created under the current
+        binding, is left alone — reconnecting it would shed continuation
+        state for no header gain.
+        """
+        session = self._ws_session
+        if session is None or getattr(session, "_connection", None) is None:
+            return
+        if getattr(self, "_ws_session_binding", None) == self.session_id:
+            return
+        self._ws_session = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(session.close())
+
     def with_model(self, name: str) -> "OpenAIProvider":
         """Return a sibling provider using the same SDK client."""
         if not name or name == self.config.model:
@@ -215,6 +241,8 @@ class OpenAIProvider(BaseLLMProvider):
         clone._last_assistant_extra_fields = {}
         clone._emergency_drop_callbacks = list(self._emergency_drop_callbacks)
         clone.prompt_cache_key = self.prompt_cache_key
+        clone.session_id = self.session_id
+        clone.session_header = self.session_header
         clone.base_url = self.base_url
         clone._client = self._client
         clone.provider_name = getattr(self, "provider_name", clone.provider_name)
@@ -266,10 +294,12 @@ class OpenAIProvider(BaseLLMProvider):
                 # Late-bound so credential reloads pick up the rebuilt client.
                 return self._open_client().responses.connect(
                     max_retries=0,
+                    extra_headers=self.request_headers(),
                     websocket_connection_options=dict(self._ws_connection_options),
                 )
 
             self._ws_session = ResponsesWSSession(_factory, **self._ws_session_options)
+            self._ws_session_binding = self.session_id
         if self._ws_session.busy or self._ws_session.disabled:
             return None
         return self._ws_session
@@ -304,6 +334,19 @@ class OpenAIProvider(BaseLLMProvider):
         if not self.prompt_cache_key:
             return {}
         return {"prompt_cache_key": self.prompt_cache_key}
+
+    def _wire_request_headers(
+        self,
+        create_kwargs: dict[str, Any],
+        overrides: dict[str, str] | None,
+    ) -> None:
+        """Attach request headers without clobbering provider-specific ones."""
+        headers = self.request_headers(overrides)
+        existing = create_kwargs.get("extra_headers")
+        if existing:
+            headers = merge_header_maps(headers, existing)
+        if headers:
+            create_kwargs["extra_headers"] = headers
 
     async def _stream_chat(
         self,
@@ -445,12 +488,14 @@ class OpenAIProvider(BaseLLMProvider):
         merged_extra = {**self.extra_body}
         if "extra_body" in kwargs:
             merged_extra.update(kwargs["extra_body"])
+        request_headers = normalize_header_map(merged_extra.pop("extra_headers", None))
         merged_extra = self._sanitize_extra_body(merged_extra)
         if merged_extra:
             create_kwargs["extra_body"] = merged_extra
 
         # Stable routing allows compatible backends to reuse cached prompt prefixes.
         create_kwargs.update(self._prompt_cache_request_kwargs())
+        self._wire_request_headers(create_kwargs, request_headers)
 
         log_request_shape(
             "Starting streaming request",
@@ -638,11 +683,13 @@ class OpenAIProvider(BaseLLMProvider):
         merged_extra = {**self.extra_body}
         if "extra_body" in kwargs:
             merged_extra.update(kwargs["extra_body"])
+        request_headers = normalize_header_map(merged_extra.pop("extra_headers", None))
         merged_extra = self._sanitize_extra_body(merged_extra)
         if merged_extra:
             create_kwargs["extra_body"] = merged_extra
 
         create_kwargs.update(self._prompt_cache_request_kwargs())
+        self._wire_request_headers(create_kwargs, request_headers)
 
         log_request_shape(
             "Starting non-streaming request",

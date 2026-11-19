@@ -93,6 +93,40 @@ class TestGrokSubscriptionProvider:
         assert kwargs == {"extra_headers": {"x-grok-conv-id": "session-1"}}
         assert "prompt_cache_key" not in kwargs
 
+    def test_configured_headers_merge_with_token_and_survive_reload(self, monkeypatch):
+        first = GrokToken(access_token="one", source="grok-cli")
+        second = GrokToken(
+            access_token="two",
+            source="grok-cli",
+            extra_headers={"x-grok-client-version": "1.0.6"},
+        )
+        candidates = [first]
+        monkeypatch.setattr(
+            "kohakuterrarium.llm.grok.provider.GrokTokens.load_candidates",
+            lambda: candidates,
+        )
+        monkeypatch.setattr(
+            "kohakuterrarium.llm.grok.provider.GrokTokens.load_bootstrap_candidates",
+            lambda: candidates,
+        )
+        provider = GrokSubscriptionProvider(
+            extra_headers={"x-custom": "c"}, session_header="x-opencode-session"
+        )
+        provider.bind_session("abc123")
+
+        # Boot headers merge operator config with the token profile.
+        assert provider._extra_headers["x-custom"] == "c"
+        assert provider._extra_headers["X-XAI-Token-Auth"] == "xai-grok-cli"
+
+        candidates[0] = second
+        assert provider.reload_credentials() is True
+        # A credential-driven rebuild must not drop operator headers.
+        assert provider._extra_headers["x-custom"] == "c"
+        assert provider._extra_headers["x-grok-client-version"] == "1.0.6"
+        assert provider._extra_headers["X-XAI-Token-Auth"] == "xai-grok-cli"
+        assert provider.session_id == "abc123"
+        assert provider.session_header == "x-opencode-session"
+
     def test_reload_applies_changed_cli_request_profile(self, monkeypatch):
         original = GrokToken(
             access_token="same-token",

@@ -36,6 +36,7 @@ class CodexWSMixin:
                 )
 
             self._ws_session = ResponsesWSSession(_factory, **self._ws_session_options)
+            self._ws_session_binding = self.session_id
         if self._ws_session.busy or self._ws_session.disabled:
             return None
         return self._ws_session

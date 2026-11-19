@@ -39,6 +39,11 @@ from kohakuterrarium.llm.codex.rate_limits import (
 )
 from kohakuterrarium.llm.codex.stream import process_codex_event, stream_codex_ws_turn
 from kohakuterrarium.llm.codex.ws import CodexWSMixin
+from kohakuterrarium.llm.headers import (
+    merge_header_maps,
+    normalize_header_map,
+    normalize_header_name,
+)
 from kohakuterrarium.llm.responses.reasoning import ResponsesReasoningCollector
 from kohakuterrarium.llm.recovery.errors import (
     RetryPolicy,
@@ -78,6 +83,8 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        session_header: str = "",
         websocket_mode: bool | None = None,
     ):
         super().__init__(LLMConfig(model=model, retry_policy=retry_policy))
@@ -91,6 +98,8 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
         self._base_url = base_url
         self._request_image_limit: int | None = None
         self.extra_body = dict(extra_body or {})
+        self._extra_headers = normalize_header_map(extra_headers)
+        self.session_header = normalize_header_name(session_header)
         self._ws_connection_options = ws_options.build_websocket_connection_options(
             self.extra_body.get("websocket_connection_options"), timeout=timeout
         )
@@ -248,6 +257,8 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
                 **self.extra_body,
                 "websocket_connection_options": self._ws_connection_options,
             },
+            extra_headers=dict(self._extra_headers),
+            session_header=self.session_header,
             websocket_mode=self._websocket_mode,
         )
         clone._tokens = self._tokens
@@ -259,6 +270,7 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
         clone._retry_policy = self._retry_policy
         clone._emergency_drop_callbacks = list(self._emergency_drop_callbacks)
         clone.prompt_cache_key = self.prompt_cache_key
+        clone.session_id = self.session_id
         clone._profile_max_context = getattr(self, "_profile_max_context", None)
         return clone
 
@@ -448,6 +460,7 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
         if self.service_tier:
             extra_params["service_tier"] = self.service_tier
         wire_extra = self._wire_extra_body()
+        preset_headers = normalize_header_map(wire_extra.pop("extra_headers", None))
 
         instr_text = instructions or "You are a helpful assistant."
         # Stable routing improves prompt-cache reuse; the prompt hash is the fallback.
@@ -455,8 +468,9 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
             self.prompt_cache_key
             or hashlib.sha256(instr_text.encode()).hexdigest()[:32]
         )
-        # Third-party Responses endpoints may reject Codex's internal session header.
-        session_headers = {} if self._api_key else {"session_id": cache_key}
+        session_headers = merge_header_maps(
+            self._session_headers(cache_key), preset_headers
+        )
 
         collected_tool_calls: list[NativeToolCall] = []
 
@@ -569,6 +583,39 @@ class CodexOAuthProvider(CodexWSMixin, BaseLLMProvider):
         """Return extra_body wire fields (framework knobs and reasoning removed)."""
         knobs = ws_options.FRAMEWORK_KNOBS | {"reasoning"}
         return {k: v for k, v in self.extra_body.items() if k not in knobs}
+
+    def _session_headers(self, cache_key: str) -> dict[str, str]:
+        """Per-request headers: static config, Codex session, then the bound id.
+
+        Third-party Responses endpoints may reject Codex's internal
+        ``session_id`` header, so it stays OAuth-only; a configured
+        ``session_header`` is always sent because the operator asked for it.
+        """
+        headers = merge_header_maps(self._extra_headers)
+        if not self._api_key:
+            headers = merge_header_maps(headers, {"session_id": cache_key})
+        if self.session_id and self.session_header:
+            headers = merge_header_maps(headers, {self.session_header: self.session_id})
+        return headers
+
+    def _reset_session_transport(self) -> None:
+        """Drop a connected WS session whose captured headers are stale.
+
+        A session that never connected, or one created under the current
+        binding, is left alone — reconnecting it would shed continuation
+        state for no header gain.
+        """
+        session = self._ws_session
+        if session is None or getattr(session, "_connection", None) is None:
+            return
+        if getattr(self, "_ws_session_binding", None) == self.session_id:
+            return
+        self._ws_session = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(session.close())
 
     def _process_stream_event(
         self,
